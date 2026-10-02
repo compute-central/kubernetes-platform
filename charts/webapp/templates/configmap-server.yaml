@@ -1,0 +1,21 @@
+{{- if .Values.serverConfig }}
+---
+# The server configuration the probes depend on.
+#
+# The chart's default image is nginx, and a stock nginx answers 404 on
+# /healthz -- so without this the startup probe fails and the pod never
+# becomes Ready. If you replace the image with an application that already
+# serves `probes.path`, set `serverConfig: {}` and this ConfigMap and its
+# mount disappear.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "webapp.fullname" . }}-server
+  labels:
+    {{- include "webapp.labels" . | nindent 4 }}
+data:
+  {{- range $name, $content := .Values.serverConfig }}
+  {{ $name }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

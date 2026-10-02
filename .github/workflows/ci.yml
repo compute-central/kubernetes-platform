@@ -72,6 +72,25 @@ jobs:
             fi
           done
 
+      # The bug that cost a CI round trip: the probes asked for /healthz and
+      # the stock nginx image answered 404, so the pod never became Ready.
+      # Assert the served paths and the probe path agree, offline.
+      - name: Assert the probe path is actually served
+        run: |
+          for overlay in manifests/base manifests/overlays/*; do
+            [ -f "$overlay/kustomization.yaml" ] || continue
+            rendered=$(kubectl kustomize "$overlay")
+            probe=$(echo "$rendered" | yq 'select(.kind == "Deployment")
+                     | .spec.template.spec.containers[0].readinessProbe.httpGet.path' | head -1)
+            served=$(echo "$rendered" | yq 'select(.kind == "ConfigMap")
+                      | .data."default.conf" // ""' | tr -d '\n')
+            echo "$overlay: probe=$probe"
+            case "$served" in
+              *"location = $probe"*) ;;
+              *) echo "::error::$overlay probes $probe but no server block serves it"; exit 1 ;;
+            esac
+          done
+
   helm:
     name: Helm lint and template
     runs-on: ubuntu-latest
@@ -182,6 +201,14 @@ jobs:
             -n checkout-dev -- \
             curl -sS --fail --max-time 10 --retry 5 --retry-connrefused \
             http://dev-checkout/healthz
+
+      - name: Confirm the probe path returns 200 and the body is right
+        run: |
+          kubectl run curl-body --rm -i --restart=Never --image=curlimages/curl:8.11.1 \
+            -n checkout-dev -- \
+            curl -sS --fail --max-time 10 --retry 5 --retry-connrefused \
+            http://dev-checkout/healthz | grep -qx ok \
+            || { echo "::error::/healthz did not return the expected body"; exit 1; }
 
       - name: Confirm the security context actually applied
         run: |

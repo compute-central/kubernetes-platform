@@ -39,7 +39,8 @@ manifests/
 │   ├── networkpolicy.yaml   deny-all + the DNS rule everyone forgets
 │   ├── rbac.yaml            a Role scoped to one named ConfigMap
 │   ├── hpa.yaml pdb.yaml service.yaml ingress.yaml
-│   └── checkout-config.env  generated into a ConfigMap, so changes roll pods
+│   ├── checkout-config.env  generated into a ConfigMap, so changes roll pods
+│   └── nginx/default.conf   serves /healthz, which the probes depend on
 └── overlays/
     ├── dev/         1 replica, no HPA, no PDB — single-node friendly
     ├── staging/     2 replicas, debug logging
@@ -138,6 +139,14 @@ of one Deployment can run different code, and a rollback does not roll back.
 
 **`targetPort` by name.** The Deployment can then move its container port
 without the Service silently pointing at nothing.
+
+**Probes must point at something that exists.** CI caught this one: the probes
+asked for `/healthz` and the stock nginx image answers 404 there, so the pod
+never became Ready and the rollout timed out. The server block that serves it
+now ships in `manifests/base/nginx/default.conf` and in the chart's
+`serverConfig` value, and CI asserts offline that the probe path and the served
+paths agree. Schema validation cannot catch this class of bug — only actually
+running it can.
 
 **Argo CD: `prune` and `selfHeal` are off by default.** Without `prune`, a
 deleted manifest keeps running and the repository stops being the source of

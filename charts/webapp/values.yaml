@@ -93,6 +93,35 @@ securityContext:
   capabilities:
     drop: ["ALL"]
 
+# Configuration files mounted into the container, as filename -> content.
+#
+# The default image is nginx, and a stock nginx answers 404 on probes.path --
+# so the chart ships the server block that serves it. Point the chart at an
+# application that already serves its own health endpoint and set this to {}
+# to drop both the ConfigMap and the mount.
+serverConfigMountPath: /etc/nginx/conf.d
+serverConfig:
+  default.conf: |
+    server {
+        # Must match containerPort. 8080 rather than 80 because the container
+        # runs as a non-root user and cannot bind a privileged port.
+        listen 8080;
+        listen [::]:8080;
+        server_name _;
+        server_tokens off;
+
+        location = /healthz {
+            access_log off;
+            add_header Content-Type text/plain always;
+            return 200 "ok\n";
+        }
+
+        location / {
+            root  /usr/share/nginx/html;
+            index index.html;
+        }
+    }
+
 # readOnlyRootFilesystem means every writable path needs a volume. Listing
 # them here keeps the container's writable surface visible.
 emptyDirMounts:

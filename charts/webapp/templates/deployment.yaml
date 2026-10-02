@@ -34,6 +34,9 @@ spec:
           them.
         */}}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.serverConfig }}
+        checksum/server-config: {{ include (print $.Template.BasePath "/configmap-server.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -126,21 +129,29 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- with .Values.emptyDirMounts }}
           volumeMounts:
-            {{- range . }}
+            {{- if .Values.serverConfig }}
+            # Read-only: nothing should rewrite its own configuration at
+            # runtime.
+            - name: server-config
+              mountPath: {{ .Values.serverConfigMountPath }}
+              readOnly: true
+            {{- end }}
+            {{- range .Values.emptyDirMounts }}
             - name: {{ .name }}
               mountPath: {{ .mountPath }}
             {{- end }}
-          {{- end }}
-      {{- with .Values.emptyDirMounts }}
       volumes:
-        {{- range . }}
+        {{- if .Values.serverConfig }}
+        - name: server-config
+          configMap:
+            name: {{ include "webapp.fullname" . }}-server
+        {{- end }}
+        {{- range .Values.emptyDirMounts }}
         - name: {{ .name }}
           emptyDir:
             sizeLimit: {{ .sizeLimit }}
         {{- end }}
-      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

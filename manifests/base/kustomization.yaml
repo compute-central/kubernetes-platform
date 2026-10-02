@@ -28,6 +28,11 @@ configMapGenerator:
   - name: checkout-config
     envs:
       - checkout-config.env
+  # The nginx server block that actually serves /healthz. Generated too, so a
+  # change to it rolls the Deployment like any other config change.
+  - name: checkout-nginx
+    files:
+      - default.conf=nginx/default.conf
 
 # Applied to every resource, and to selectors and pod templates as well.
 labels:
