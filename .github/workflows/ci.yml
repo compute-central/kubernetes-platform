@@ -193,46 +193,70 @@ jobs:
           kubectl apply -k manifests/overlays/dev
           kubectl rollout status deployment/dev-checkout -n checkout-dev --timeout=180s
 
-      # A plain `kubectl run` is rejected here, and that is the namespace
-      # hardening working: checkout-dev enforces Pod Security Admission's
-      # `restricted` profile, so even a throwaway debug pod must drop all
-      # capabilities, refuse privilege escalation, run as non-root and set a
-      # seccomp profile. Spelling that out is a better demonstration of what
-      # `restricted` demands than any amount of prose.
+      # Two things make this an explicit Pod manifest rather than a
+      # `kubectl run`:
+      #
+      # 1. checkout-dev enforces Pod Security Admission's `restricted`
+      #    profile, so even a throwaway debug pod must drop all capabilities,
+      #    refuse privilege escalation, run as non-root and set a seccomp
+      #    profile. Spelling that out demonstrates what `restricted` demands
+      #    better than any prose.
+      # 2. `runAsUser` has to be *numeric*. curlimages/curl declares
+      #    `USER curl_user`, and with runAsNonRoot set the kubelet refuses to
+      #    start a container whose user it cannot verify as non-root:
+      #    "image has non-numeric user (curl_user)". 100 is that user's uid.
       - name: Confirm the pods are actually serving
         run: |
           kubectl wait --for=condition=Ready pod \
             -l app.kubernetes.io/name=checkout -n checkout-dev --timeout=120s
 
-          body=$(kubectl run curl --rm -i --restart=Never -n checkout-dev \
-            --image=curlimages/curl:8.11.1 \
-            --overrides='{
-              "spec": {
-                "securityContext": {
-                  "runAsNonRoot": true,
-                  "seccompProfile": {"type": "RuntimeDefault"}
-                },
-                "containers": [{
-                  "name": "curl",
-                  "image": "curlimages/curl:8.11.1",
-                  "args": ["-sS", "--fail", "--max-time", "10", "--retry", "5",
-                           "--retry-connrefused", "http://dev-checkout/healthz"],
-                  "securityContext": {
-                    "allowPrivilegeEscalation": false,
-                    "readOnlyRootFilesystem": true,
-                    "capabilities": {"drop": ["ALL"]}
-                  }
-                }]
-              }
-            }')
+          kubectl apply -n checkout-dev -f - <<'YAML'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: healthcheck
+          spec:
+            restartPolicy: Never
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 100
+              runAsGroup: 101
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: curl
+                image: curlimages/curl:8.11.1
+                args:
+                  - -sS
+                  - --fail
+                  - --max-time
+                  - "10"
+                  - --retry
+                  - "5"
+                  - --retry-connrefused
+                  - http://dev-checkout/healthz
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]
+          YAML
 
+          if ! kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
+               pod/healthcheck -n checkout-dev --timeout=120s; then
+            echo "::error::the health check pod did not succeed"
+            kubectl describe pod/healthcheck -n checkout-dev
+            kubectl logs pod/healthcheck -n checkout-dev || true
+            exit 1
+          fi
+
+          body=$(kubectl logs pod/healthcheck -n checkout-dev)
           echo "response: ${body}"
+          kubectl delete pod/healthcheck -n checkout-dev --wait=false
+
           echo "${body}" | grep -qx ok \
             || { echo "::error::GET /healthz did not return the expected body"; exit 1; }
 
-      # The counterpart: a pod that does NOT meet `restricted` must be
-      # rejected. Without this, the namespace labels could silently stop
-      # working and nothing would notice.
       - name: Confirm Pod Security Admission rejects a non-compliant pod
         run: |
           if kubectl run rootpod --restart=Never -n checkout-dev \
