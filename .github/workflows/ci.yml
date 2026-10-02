@@ -146,12 +146,26 @@ jobs:
           cluster_name: ci
           node_image: kindest/node:v1.31.4
 
+      # Server-side dry-run asks the real API server to admit the objects:
+      # it runs validation, admission webhooks and defaulting, which is a
+      # strictly stronger check than any schema. The catch is that a dry-run
+      # apply does not actually create the Namespace, so every namespaced
+      # resource in the same apply fails with "namespaces not found".
+      # Creating the Namespaces for real first is what makes the rest
+      # meaningful.
       - name: Server-side validate every overlay
         run: |
           for overlay in manifests/base manifests/overlays/*; do
             [ -f "$overlay/kustomization.yaml" ] || continue
             echo "::group::$overlay"
-            kubectl apply -k "$overlay" --dry-run=server
+            rendered=$(kubectl kustomize "$overlay")
+
+            namespaces=$(echo "$rendered" | yq 'select(.kind == "Namespace")')
+            if [ -n "$(echo "$namespaces" | tr -d '[:space:]-')" ]; then
+              echo "$namespaces" | kubectl apply -f -
+            fi
+
+            echo "$rendered" | kubectl apply -f - --dry-run=server
             echo "::endgroup::"
           done
 
