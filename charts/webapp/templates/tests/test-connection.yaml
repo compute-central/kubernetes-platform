@@ -3,10 +3,19 @@ A Helm test. `helm test <release>` runs this Pod and reports whether it
 succeeded, which makes it a genuine post-deploy gate rather than a smoke test
 someone runs by hand.
 
-The hook-delete-policy matters: without it, a failed test Pod is left behind
-and the *next* `helm test` fails because the Pod already exists. Keeping the
-failed one and deleting it before the next run is the combination that lets
-you actually read the logs of a failure.
+The delete policy is `before-hook-creation` and deliberately nothing else.
+
+The obvious choice is `before-hook-creation,hook-succeeded`, and it is wrong:
+`hook-succeeded` deletes the Pod the instant it passes, so `helm test --logs`
+then fails with
+
+    Error: unable to get pod logs for <release>-test-connection:
+    pods "<release>-test-connection" not found
+
+The test passed; reading its output did not. With only
+`before-hook-creation`, the Pod survives whether it passed or failed -- so its
+logs are always there to read -- and the next `helm test` removes it before
+creating the new one, which is what stops a stale Pod blocking the rerun.
 */}}
 apiVersion: v1
 kind: Pod
@@ -16,7 +25,7 @@ metadata:
     {{- include "webapp.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   securityContext:

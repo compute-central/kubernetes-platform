@@ -170,6 +170,12 @@ truth. Without `selfHeal`, manual `kubectl edit` drift persists. Production
 here deliberately has *no* automated sync — so a human still decides, and the
 controller does not fight an emergency change mid-incident.
 
+**`hook-delete-policy: hook-succeeded` breaks `helm test --logs`.** It deletes
+the test pod the instant it passes, so fetching its output fails with
+`pods ... not found` — the test succeeded and reading it did not. The chart
+uses `before-hook-creation` alone: the pod survives either outcome so its logs
+are always readable, and the next run removes it before creating the new one.
+
 ## Validation
 
 ```bash
