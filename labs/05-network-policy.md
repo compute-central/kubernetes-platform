@@ -2,7 +2,7 @@
 
 **Time:** 30 minutes · **Prerequisites:** a cluster with a CNI that enforces NetworkPolicy
 
-## Before you start: your CNI probably ignores policy
+## Before you start: find out whether your CNI enforces policy
 
 NetworkPolicy is an **API, not an implementation**. The API server happily
 accepts the objects; whether anything enforces them is entirely up to the CNI.
@@ -10,21 +10,47 @@ accepts the objects; whether anything enforces them is entirely up to the CNI.
 | CNI | Enforces NetworkPolicy |
 |---|---|
 | Calico, Cilium, Antrea, Weave | yes |
-| **kindnet** (kind's default) | **no** |
+| kind / kindnet | **version-dependent** — older kind enforced nothing; recent versions do |
 | **flannel** | **no** |
 
-This is the worst failure mode in Kubernetes networking: your policies are
-accepted, `kubectl get netpol` shows them, and **nothing is enforced**. You
-believe you are isolated and you are wide open.
+When nothing enforces them you get the worst failure mode in Kubernetes
+networking: the policies are accepted, `kubectl get netpol` lists them, and
+**nothing happens**. You believe you are isolated and you are wide open.
 
-Check what you have:
+Naming your CNI is not enough to know, so **measure it**. This two-pod test is
+the only answer you should trust:
 
 ```bash
-kubectl get pods -n kube-system -o name | grep -iE 'calico|cilium|antrea|kindnet|flannel'
+# 1. Deny everything in a scratch namespace
+kubectl create namespace policy-test
+kubectl label namespace policy-test kubernetes.io/metadata.name=policy-test --overwrite
+kubectl apply -n policy-test -f - <<'YAML'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+YAML
+
+# 2. A pod in that namespace should now reach nothing at all
+kubectl run probe -n policy-test --rm -it --restart=Never \
+  --image=nicolaka/netshoot -- curl -sS --max-time 8 https://example.com
+
+# Blocked  -> enforcement works.
+# HTML back -> the policy is being ignored. Everything below will "pass"
+#              while protecting nothing.
+kubectl delete namespace policy-test
 ```
 
-If that says `kindnet`, recreate the cluster with the default CNI disabled and
-install Calico:
+For reference, this repository's CI runs the same check on every build and
+prints `NETWORKPOLICY ENFORCED` or `NETWORKPOLICY NOT ENFORCED`, because the
+answer changes with kind versions and is not worth trusting to documentation.
+
+If your cluster does **not** enforce policy and you want to work through the
+rest of this lab, recreate it with the default CNI disabled and install
+Calico:
 
 ```bash
 kind delete cluster --name platform-lab

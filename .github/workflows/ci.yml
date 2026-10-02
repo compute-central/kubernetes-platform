@@ -193,18 +193,66 @@ jobs:
           kubectl apply -k manifests/overlays/dev
           kubectl rollout status deployment/dev-checkout -n checkout-dev --timeout=180s
 
-      # Two things make this an explicit Pod manifest rather than a
-      # `kubectl run`:
+      # Reaching the Service from inside checkout-dev needs an explicit
+      # NetworkPolicy allowance, because the base ships a deny-all that this
+      # cluster genuinely enforces. The first attempt at this step failed with
+      # `curl: (28) Connection timed out` while DNS resolved fine -- which is
+      # the textbook signature of deny-all plus allow-DNS working exactly as
+      # written.
       #
-      # 1. checkout-dev enforces Pod Security Admission's `restricted`
-      #    profile, so even a throwaway debug pod must drop all capabilities,
-      #    refuse privilege escalation, run as non-root and set a seccomp
-      #    profile. Spelling that out demonstrates what `restricted` demands
-      #    better than any prose.
-      # 2. `runAsUser` has to be *numeric*. curlimages/curl declares
-      #    `USER curl_user`, and with runAsNonRoot set the kubelet refuses to
-      #    start a container whose user it cannot verify as non-root:
-      #    "image has non-numeric user (curl_user)". 100 is that user's uid.
+      # The probe pod is therefore labelled and granted the narrow path it
+      # needs. Granting it here rather than loosening the base keeps the
+      # default deny intact and makes the allowance visible.
+      - name: Allow the health-check pod through the NetworkPolicy
+        run: |
+          kubectl apply -n checkout-dev -f - <<'YAML'
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: ci-allow-healthcheck-egress
+          spec:
+            podSelector:
+              matchLabels:
+                probe: healthcheck
+            policyTypes: [Egress]
+            egress:
+              - to:
+                  - podSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: checkout
+                ports:
+                  - protocol: TCP
+                    port: 8080
+          YAML
+
+          kubectl apply -n checkout-dev -f - <<'YAML'
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: ci-allow-healthcheck-ingress
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: checkout
+            policyTypes: [Ingress]
+            ingress:
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        probe: healthcheck
+                ports:
+                  - protocol: TCP
+                    port: 8080
+          YAML
+
+      # `runAsUser` must be numeric: curlimages/curl declares `USER curl_user`
+      # by name, and with runAsNonRoot set the kubelet refuses to start a
+      # container whose user it cannot verify as non-root. 100 is that uid.
+      #
+      # An explicit manifest rather than `kubectl run`, because checkout-dev
+      # enforces Pod Security Admission's `restricted` profile: even a
+      # throwaway debug pod must drop all capabilities, refuse privilege
+      # escalation, run as non-root and set a seccomp profile.
       - name: Confirm the pods are actually serving
         run: |
           kubectl wait --for=condition=Ready pod \
@@ -215,6 +263,8 @@ jobs:
           kind: Pod
           metadata:
             name: healthcheck
+            labels:
+              probe: healthcheck
           spec:
             restartPolicy: Never
             securityContext:
@@ -247,6 +297,7 @@ jobs:
             echo "::error::the health check pod did not succeed"
             kubectl describe pod/healthcheck -n checkout-dev
             kubectl logs pod/healthcheck -n checkout-dev || true
+            kubectl get netpol,endpointslices,svc -n checkout-dev
             exit 1
           fi
 
@@ -256,6 +307,51 @@ jobs:
 
           echo "${body}" | grep -qx ok \
             || { echo "::error::GET /healthz did not return the expected body"; exit 1; }
+
+      # Informational, never fails the build. Whether NetworkPolicy is
+      # enforced depends entirely on the CNI, which is the whole point of
+      # labs/05 -- so the answer is measured here rather than asserted in
+      # prose that can quietly go stale.
+      - name: Report whether the CNI enforces NetworkPolicy
+        run: |
+          kubectl get pods -n kube-system -o name \
+            | grep -iE 'kindnet|calico|cilium|antrea|flannel|network-polic' || true
+
+          kubectl apply -n checkout-dev -f - <<'YAML'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: policy-probe
+          spec:
+            restartPolicy: Never
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 100
+              runAsGroup: 101
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: curl
+                image: curlimages/curl:8.11.1
+                args: ["-sS", "--max-time", "8", "http://dev-checkout/healthz"]
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]
+          YAML
+
+          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
+            pod/policy-probe -n checkout-dev --timeout=60s >/dev/null 2>&1 || true
+          out=$(kubectl logs pod/policy-probe -n checkout-dev 2>&1 || true)
+          kubectl delete pod/policy-probe -n checkout-dev --wait=false >/dev/null 2>&1 || true
+
+          if echo "$out" | grep -qx ok; then
+            echo "NETWORKPOLICY NOT ENFORCED: an unallowed pod reached the Service."
+            echo "This cluster accepts the deny-all and ignores it."
+          else
+            echo "NETWORKPOLICY ENFORCED: an unallowed pod was blocked (${out:-no output})."
+          fi
 
       - name: Confirm Pod Security Admission rejects a non-compliant pod
         run: |

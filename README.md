@@ -114,10 +114,19 @@ visible traffic wobble on every deploy.
 to the replica count permits zero disruption, and `kubectl drain` then blocks
 forever during a cluster upgrade.
 
-**NetworkPolicy needs a CNI that enforces it.** kindnet and flannel accept the
-objects and enforce nothing. Your policies appear in `kubectl get netpol` and
-the workload is wide open — the worst failure mode in Kubernetes networking.
-[Lab 05](labs/05-network-policy.md) covers detecting this and installing Calico.
+**NetworkPolicy needs a CNI that enforces it — so test, do not assume.**
+NetworkPolicy is an API, not an implementation: the API server accepts the
+objects regardless, and whether anything enforces them is up to the CNI.
+Historically kind's kindnet enforced nothing, and flannel still does not, which
+is the worst failure mode in Kubernetes networking — your policies show up in
+`kubectl get netpol` and the workload is wide open.
+
+Recent kind versions *do* enforce it, which this repository found out the hard
+way: CI's health-check pod failed with `curl: (28) Connection timed out` while
+DNS resolved fine, the exact signature of the base's deny-all plus allow-DNS
+being applied. CI now measures enforcement on every run and prints the answer
+rather than asserting it in prose that can go stale.
+[Lab 05](labs/05-network-policy.md) shows how to check your own cluster.
 
 **Deny-all breaks DNS first.** `policyTypes: [Egress]` with `podSelector: {}`
 blocks UDP/53 to CoreDNS, and every symptom then looks like a broken
