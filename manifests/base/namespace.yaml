@@ -1,0 +1,23 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: checkout
+  labels:
+    app.kubernetes.io/name: checkout
+    # Pod Security Admission. These three labels are the entire mechanism that
+    # replaced PodSecurityPolicy, and they are namespace labels rather than a
+    # separate resource -- which is why they are easy to forget.
+    #
+    # enforce: reject pods that violate the restricted profile
+    # audit:   record violations in the audit log
+    # warn:    return a warning to whoever ran kubectl apply
+    #
+    # Pinning the version means a future Kubernetes release cannot silently
+    # tighten the profile under a running workload.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.31
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.31
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.31

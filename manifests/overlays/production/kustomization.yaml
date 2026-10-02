@@ -1,0 +1,32 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: checkout-prod
+
+resources:
+  - ../../base
+  - resourcequota.yaml
+
+patches:
+  - path: scale.yaml
+  - path: hardening.yaml
+  - path: ingress-host.yaml
+
+configMapGenerator:
+  - name: checkout-config
+    behavior: merge
+    literals:
+      - LOG_LEVEL=info
+      - FEATURE_RATE_LIMITING=true
+
+images:
+  - name: nginxinc/nginx-unprivileged
+    # Production pins by digest, not by tag. A tag is a mutable pointer: the
+    # same tag can resolve to different bytes next week, so two pods of one
+    # Deployment can run different code and a rollback does not roll back.
+    #
+    # Replace this digest when promoting a build. In a real pipeline, CI writes
+    # it here and opens the PR.
+    newName: nginxinc/nginx-unprivileged
+    digest: sha256:0b2b5f0ba34c9bbf2e8e7d4ac0a0ec5f84e0a3d4a2e1a3b1c0d9e8f7a6b5c4d3

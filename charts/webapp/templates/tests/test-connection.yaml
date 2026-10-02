@@ -1,0 +1,50 @@
+{{- /*
+A Helm test. `helm test <release>` runs this Pod and reports whether it
+succeeded, which makes it a genuine post-deploy gate rather than a smoke test
+someone runs by hand.
+
+The hook-delete-policy matters: without it, a failed test Pod is left behind
+and the *next* `helm test` fails because the Pod already exists. Keeping the
+failed one and deleting it before the next run is the combination that lets
+you actually read the logs of a failure.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "webapp.fullname" . }}-test-connection"
+  labels:
+    {{- include "webapp.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: curlimages/curl:8.11.1
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      args:
+        - --fail
+        - --silent
+        - --show-error
+        - --max-time
+        - "10"
+        - --retry
+        - "5"
+        - --retry-connrefused
+        - "http://{{ include "webapp.fullname" . }}:{{ .Values.service.port }}{{ .Values.probes.path }}"
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi

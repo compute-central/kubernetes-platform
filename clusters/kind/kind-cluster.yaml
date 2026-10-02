@@ -1,0 +1,43 @@
+---
+# A three-node kind cluster that can actually exercise this repository:
+# topology spread has somewhere to spread to, PodDisruptionBudgets mean
+# something, and the ingress controller has a node to pin to.
+#
+#   kind create cluster --config clusters/kind/kind-cluster.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: platform-lab
+
+nodes:
+  - role: control-plane
+    # The ingress controller's node selector targets this label, and ports 80
+    # and 443 are mapped to the host so http://checkout.localtest.me works
+    # from the browser. localtest.me resolves to 127.0.0.1 with no /etc/hosts
+    # editing.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
+  - role: worker
+  - role: worker
+
+networking:
+  # kindnet does not enforce NetworkPolicy. Disabling the default CNI lets you
+  # install Calico or Cilium and have the policies in manifests/ actually do
+  # something -- see labs/05 for the walkthrough.
+  #
+  # Leave this commented out for a cluster that just works; uncomment it when
+  # you are ready to install a CNI yourself, because without one the nodes
+  # stay NotReady.
+  # disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"

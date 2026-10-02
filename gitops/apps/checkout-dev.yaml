@@ -1,0 +1,37 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: checkout-dev
+  namespace: argocd
+  finalizers:
+    # Without this finalizer, deleting the Application leaves every resource it
+    # created orphaned in the cluster.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/compute-central/kubernetes-platform.git
+    targetRevision: main
+    path: manifests/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: checkout-dev
+  syncPolicy:
+    automated:
+      # prune: delete resources removed from git. Off by default in Argo CD,
+      # which means a deleted manifest silently keeps running -- the repository
+      # stops being the source of truth the moment you remove a file.
+      prune: true
+      # selfHeal: revert manual kubectl edits. This is the setting that makes
+      # GitOps real rather than aspirational.
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

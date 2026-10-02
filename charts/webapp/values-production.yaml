@@ -1,0 +1,63 @@
+---
+# helm upgrade --install checkout charts/webapp -f charts/webapp/values-production.yaml
+#
+# Only the differences from values.yaml. Keeping this file small is the point:
+# a long overlay means the defaults are wrong.
+replicaCount: 6
+
+image:
+  # Pin by digest in production. Replace on every promotion; in a real pipeline
+  # CI writes this line and opens the PR.
+  digest: "sha256:0b2b5f0ba34c9bbf2e8e7d4ac0a0ec5f84e0a3d4a2e1a3b1c0d9e8f7a6b5c4d3"
+
+config:
+  LOG_LEVEL: "info"
+  FEATURE_RATE_LIMITING: "true"
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 6
+  maxReplicas: 30
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 75%
+
+topologySpread:
+  enabled: true
+  # Enough nodes exist here that a Pending pod is the correct outcome rather
+  # than silently stacking replicas onto one node.
+  whenUnsatisfiable: DoNotSchedule
+
+networkPolicy:
+  enabled: true
+  allowedNamespaces:
+    - ingress-nginx
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+  hosts:
+    - host: checkout.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - checkout.example.com
+      secretName: checkout-tls
+
+# Longer drain: production connections are long-lived and dropping them is
+# visible to customers.
+preStopSleepSeconds: 20

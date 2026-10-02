@@ -1,0 +1,62 @@
+---
+# A tenant namespace template, locked down by default.
+#
+# Pod Security Admission replaced PodSecurityPolicy and is configured entirely
+# through namespace labels -- which is why it is so easy to forget. A namespace
+# without these labels runs under the `privileged` profile, meaning no
+# restrictions at all.
+#
+# The three modes do different jobs:
+#   enforce  reject non-compliant pods
+#   audit    record them in the audit log
+#   warn     warn the person running kubectl apply
+#
+# Running audit and warn one profile *stricter* than enforce is a useful
+# migration technique: you see what would break before you break it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-a
+  labels:
+    kubernetes.io/metadata.name: tenant-a
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: v1.31
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.31
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.31
+---
+# Deny-all is the right default for a tenant namespace. Each workload then adds
+# the narrow allow rules it needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: tenant-a
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Without this, the deny-all above breaks DNS and every symptom looks like a
+# broken application rather than a policy decision.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: tenant-a
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

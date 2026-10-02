@@ -1,0 +1,19 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: checkout
+  labels:
+    app.kubernetes.io/name: checkout
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: checkout
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 80
+      # Target the port by name, not number. The Deployment can then change
+      # its containerPort without the Service silently pointing at nothing.
+      targetPort: http
+      protocol: TCP

@@ -1,0 +1,196 @@
+---
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  K8S_VERSION: "1.31.0"
+
+jobs:
+  manifests:
+    name: Kustomize build and schema validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      # Schema validation offline, against the real Kubernetes JSON schemas.
+      # No cluster, so it runs on a fork's pull request with no secrets.
+      - name: Build and validate every overlay
+        run: |
+          fail=0
+          for overlay in manifests/base manifests/overlays/*; do
+            [ -f "$overlay/kustomization.yaml" ] || continue
+            echo "::group::$overlay"
+            kubectl kustomize "$overlay" > /tmp/rendered.yaml || { echo "build failed"; fail=1; }
+            kubeconform -strict -summary -verbose \
+              -kubernetes-version "$K8S_VERSION" /tmp/rendered.yaml || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      - name: Validate the policy manifests
+        run: kubeconform -strict -summary -kubernetes-version "$K8S_VERSION" policies/
+
+      - name: Build the GitOps app-of-apps
+        run: kubectl kustomize gitops > /dev/null
+
+      # Catches the mistake that cost the most time writing this repo: a
+      # generated ConfigMap whose hashed name is not propagated into the
+      # Deployment, which fails at runtime with CreateContainerConfigError
+      # rather than at apply time.
+      - name: Assert generated ConfigMap references are rewritten
+        run: |
+          for overlay in manifests/base manifests/overlays/*; do
+            [ -f "$overlay/kustomization.yaml" ] || continue
+            rendered=$(kubectl kustomize "$overlay")
+            cm=$(echo "$rendered" | yq 'select(.kind == "ConfigMap") | .metadata.name' | head -1)
+            ref=$(echo "$rendered" | yq 'select(.kind == "Deployment")
+                   | .spec.template.spec.containers[0].envFrom[0].configMapRef.name' | head -1)
+            echo "$overlay: ConfigMap=$cm reference=$ref"
+            if [ "$cm" != "$ref" ]; then
+              echo "::error::$overlay references '$ref' but the generated ConfigMap is '$cm'"
+              exit 1
+            fi
+          done
+
+  helm:
+    name: Helm lint and template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+
+      - name: helm lint with every values file
+        run: |
+          helm lint charts/webapp
+          for values in charts/webapp/values-*.yaml; do
+            echo "::group::$values"
+            helm lint charts/webapp -f "$values"
+            echo "::endgroup::"
+          done
+
+      - name: Validate the rendered output
+        run: |
+          helm template checkout charts/webapp \
+            | kubeconform -strict -summary -kubernetes-version "$K8S_VERSION" -
+          for values in charts/webapp/values-*.yaml; do
+            echo "::group::$values"
+            helm template checkout charts/webapp -f "$values" \
+              | kubeconform -strict -summary -kubernetes-version "$K8S_VERSION" -
+            echo "::endgroup::"
+          done
+
+      # The chart promises these specifically, so they are asserted rather
+      # than assumed.
+      - name: Assert the chart's contract
+        run: |
+          prod=$(helm template checkout charts/webapp -f charts/webapp/values-production.yaml)
+
+          echo "$prod" | grep -q 'image: "nginxinc/nginx-unprivileged@sha256:' \
+            || { echo "::error::production does not pin the image by digest"; exit 1; }
+
+          echo "$prod" | yq 'select(.kind == "Deployment") | .spec.replicas' | grep -qx 'null' \
+            || { echo "::error::replicas is set while the HPA is enabled"; exit 1; }
+
+          echo "$prod" | grep -q 'checksum/config:' \
+            || { echo "::error::the config checksum annotation is missing"; exit 1; }
+
+          dev=$(helm template checkout charts/webapp -f charts/webapp/values-dev.yaml)
+          if echo "$dev" | grep -q 'kind: HorizontalPodAutoscaler'; then
+            echo "::error::dev should not render an HPA"; exit 1
+          fi
+
+  kind:
+    name: Deploy to a real cluster
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      # The only test that proves the manifests actually work: schema
+      # validation cannot catch a bad probe path or a selector that matches
+      # nothing.
+      - name: Create a kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ci
+          node_image: kindest/node:v1.31.4
+
+      - name: Server-side validate every overlay
+        run: |
+          for overlay in manifests/base manifests/overlays/*; do
+            [ -f "$overlay/kustomization.yaml" ] || continue
+            echo "::group::$overlay"
+            kubectl apply -k "$overlay" --dry-run=server
+            echo "::endgroup::"
+          done
+
+      - name: Deploy the dev overlay for real
+        run: |
+          kubectl apply -k manifests/overlays/dev
+          kubectl rollout status deployment/dev-checkout -n checkout-dev --timeout=180s
+
+      - name: Confirm the pods are actually serving
+        run: |
+          kubectl wait --for=condition=Ready pod \
+            -l app.kubernetes.io/name=checkout -n checkout-dev --timeout=120s
+          kubectl run curl --rm -i --restart=Never --image=curlimages/curl:8.11.1 \
+            -n checkout-dev -- \
+            curl -sS --fail --max-time 10 --retry 5 --retry-connrefused \
+            http://dev-checkout/healthz
+
+      - name: Confirm the security context actually applied
+        run: |
+          pod=$(kubectl get pod -n checkout-dev -l app.kubernetes.io/name=checkout \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n checkout-dev "$pod" -- id -u | grep -qx 10001 \
+            || { echo "::error::container is not running as uid 10001"; exit 1; }
+          # The root filesystem is read-only, so this write must fail.
+          if kubectl exec -n checkout-dev "$pod" -- sh -c 'touch /should-fail' 2>/dev/null; then
+            echo "::error::root filesystem is writable"; exit 1
+          fi
+
+      - name: Install the chart and run its test hook
+        run: |
+          helm upgrade --install checkout charts/webapp \
+            --namespace helm-test --create-namespace \
+            -f charts/webapp/values-dev.yaml --wait --timeout 180s
+          helm test checkout --namespace helm-test --logs
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl describe pods -n checkout-dev || true
+          kubectl logs -n checkout-dev -l app.kubernetes.io/name=checkout --tail=100 || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40 || true

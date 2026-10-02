@@ -1,0 +1,24 @@
+# Rendered output and local state
+rendered/
+*.rendered.yaml
+kubeconfig
+kubeconfig-*
+.kube/
+
+# Helm
+charts/*/charts/
+charts/*.tgz
+charts/*/Chart.lock
+
+# Secrets must never land here
+*.pem
+*.key
+secrets.yaml
+*-secret.yaml
+sealed-secrets-key*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store

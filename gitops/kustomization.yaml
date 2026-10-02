@@ -1,0 +1,16 @@
+---
+# App-of-apps: one apply creates the project and every Application, so
+# bootstrapping a cluster is a single command.
+#
+#   kubectl apply -k gitops
+#
+# The kustomization lives at gitops/ rather than gitops/apps/ because
+# kustomize refuses to reference files outside its own root -- a deliberate
+# restriction that stops a kustomization reaching anywhere on the filesystem.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+  - argocd/project.yaml
+  - apps/checkout-dev.yaml
+  - apps/checkout-production.yaml

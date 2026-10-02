@@ -1,0 +1,40 @@
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: checkout
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: checkout
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          # Utilization is a percentage of the *request*, not of the limit or
+          # of the node. With requests.cpu: 100m, 70% means 70m. Scaling on a
+          # workload with no CPU request is undefined and the HPA will report
+          # "unknown".
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # React quickly to load, but not to a single spiky data point.
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      # Scale down slowly. Aggressive scale-down plus a traffic pattern that
+      # oscillates gives you flapping, and every scale event costs a pod
+      # startup and a connection reset.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60

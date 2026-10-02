@@ -1,0 +1,37 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# kustomize sets the namespace on every resource, and renames the Namespace
+# object itself to match. Individual resources therefore do NOT hardcode it:
+# if they did, the generated ConfigMap (which has no namespace until this
+# transformer runs) would have a different resource ID, and kustomize would
+# silently fail to rewrite its hashed name into the Deployment's envFrom.
+namespace: checkout
+
+# The base is complete and deployable on its own. Overlays patch it rather
+# than re-declaring it, so a change to a probe or a security context happens
+# in exactly one place.
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+
+# The ConfigMap is generated, not committed. See checkout-config.env for why.
+configMapGenerator:
+  - name: checkout-config
+    envs:
+      - checkout-config.env
+
+# Applied to every resource, and to selectors and pod templates as well.
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: checkout
+      app.kubernetes.io/managed-by: kustomize

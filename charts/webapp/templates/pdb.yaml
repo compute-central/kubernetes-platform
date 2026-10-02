@@ -1,0 +1,20 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+---
+# Constrains voluntary disruption only: drains, upgrades, autoscaler
+# scale-down. Nothing protects against a node dying.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "webapp.fullname" . }}
+  labels:
+    {{- include "webapp.labels" . | nindent 4 }}
+spec:
+  {{- /*
+    Never set minAvailable equal to the replica count: that budget allows zero
+    disruption and a node drain blocks forever waiting for it.
+  */}}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "webapp.selectorLabels" . | nindent 6 }}
+{{- end }}

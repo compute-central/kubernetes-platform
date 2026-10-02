@@ -1,0 +1,186 @@
+---
+# The reference Deployment. Nearly every line here is the fix for a specific
+# production failure, noted inline.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+  labels: &labels
+    app.kubernetes.io/name: checkout
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: checkout
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: checkout
+      app.kubernetes.io/component: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # maxUnavailable: 0 means capacity never dips below `replicas` during a
+      # rollout. The trade-off is that the cluster needs room for one extra pod.
+      # With maxUnavailable: 1 a rollout quietly runs at reduced capacity, which
+      # is how a deploy during a traffic peak turns into an incident.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: checkout
+      automountServiceAccountToken: false
+
+      # Without this, the default is 30s of SIGTERM-to-SIGKILL. The real reason
+      # to set it is below, in the preStop hook.
+      terminationGracePeriodSeconds: 45
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread replicas across nodes. Three replicas on one node is not high
+      # availability -- it is one node failure away from a full outage.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          # ScheduleAnyway, not DoNotSchedule: on a single-node cluster (kind,
+          # minikube, a small dev cluster) DoNotSchedule leaves pods Pending
+          # forever. Prefer the spread, do not require it.
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: checkout
+              app.kubernetes.io/component: web
+
+      containers:
+        - name: app
+          # Pinned by digest in the overlays. A floating tag like :latest means
+          # two pods of the same Deployment can run different code, and a
+          # rollback does not roll anything back.
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: checkout-config
+
+          env:
+            # Surfacing identity into the app makes logs traceable back to a
+            # pod and node without guessing.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          # Three probes, three different jobs. Conflating them is the single
+          # most common cause of self-inflicted outages in Kubernetes.
+          #
+          # startupProbe: "has it finished booting?" While it runs, the
+          #   liveness probe is suspended. Without it, a slow-starting app is
+          #   killed by its own liveness probe and never starts at all.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30   # up to 60s to boot
+            timeoutSeconds: 2
+
+          # livenessProbe: "is it wedged and in need of a restart?" It must
+          #   check only in-process health. If it calls a database, a database
+          #   blip restarts every pod in the fleet at once and turns a
+          #   degradation into an outage.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # readinessProbe: "should it receive traffic right now?" This one may
+          #   check dependencies: failing it removes the pod from the Service
+          #   endpoints without restarting it, which is exactly right for a
+          #   dependency that is temporarily unavailable.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+            successThreshold: 1
+
+          lifecycle:
+            preStop:
+              exec:
+                # Endpoint removal and the SIGTERM are concurrent, not ordered.
+                # kube-proxy and the ingress controller need a moment to stop
+                # routing to this pod; without this sleep, requests arrive
+                # after the server has begun shutting down and clients see
+                # connection resets mid-rollout.
+                command: ["/bin/sh", "-c", "sleep 10"]
+
+          resources:
+            requests:
+              # requests drive scheduling and the QoS class. Omitting them lets
+              # the scheduler overcommit a node into eviction.
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # No CPU limit on purpose. A CPU limit throttles the container
+              # via CFS quota even when the node is idle, which shows up as
+              # mysterious p99 latency. The request already guarantees a share.
+              #
+              # A memory limit, by contrast, is essential: memory is
+              # incompressible, and without a limit one leaking pod takes the
+              # whole node down with it.
+              memory: 256Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+
+          # readOnlyRootFilesystem means anything the process writes needs an
+          # explicit volume. This is a feature: it makes the writable surface
+          # of the container visible in the manifest.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: nginx-cache
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: nginx-run
+          emptyDir:
+            sizeLimit: 8Mi

@@ -1,0 +1,42 @@
+---
+# A ResourceQuota caps what the namespace can consume in total. Its real value
+# is blast-radius control: a runaway HPA or a bad commit cannot starve every
+# other workload on the cluster.
+#
+# Note the interaction with LimitRange below: once a quota sets
+# requests.cpu/memory, every pod in the namespace *must* declare requests, or
+# admission rejects it. The LimitRange supplies defaults so that is not a
+# constant source of surprise.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: checkout-quota
+spec:
+  hard:
+    requests.cpu: "10"
+    requests.memory: 20Gi
+    limits.memory: 40Gi
+    pods: "40"
+    persistentvolumeclaims: "4"
+    services.loadbalancers: "1"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: checkout-limits
+spec:
+  limits:
+    - type: Container
+      # Applied when a container declares nothing, which is what keeps the
+      # ResourceQuota above from rejecting pods outright.
+      default:
+        memory: 256Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "4"
+        memory: 4Gi
+      min:
+        cpu: 10m
+        memory: 32Mi

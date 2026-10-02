@@ -1,0 +1,22 @@
+---
+# A PodDisruptionBudget constrains *voluntary* disruption: node drains,
+# cluster upgrades, autoscaler scale-down. It does not protect against a node
+# dying -- nothing can.
+#
+# Without one, `kubectl drain` during a cluster upgrade will happily evict
+# every replica of this Deployment at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: checkout
+spec:
+  # minAvailable as a percentage rather than a count, so it stays correct when
+  # the HPA scales the Deployment.
+  #
+  # Never set minAvailable equal to replicas: that budget permits zero
+  # disruption, and a node drain blocks forever waiting for it.
+  minAvailable: 50%
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: checkout
+      app.kubernetes.io/component: web

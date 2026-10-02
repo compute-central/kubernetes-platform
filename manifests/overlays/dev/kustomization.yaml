@@ -1,0 +1,51 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: checkout-dev
+namePrefix: dev-
+
+resources:
+  - ../../base
+
+# A dev cluster is usually one node, so the HPA and the PDB are removed
+# rather than tuned: a PDB on a single-node cluster blocks the node drain you
+# will inevitably want to do.
+patches:
+  - path: replicas-and-resources.yaml
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: checkout
+    patch: |
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: checkout
+  - target:
+      kind: PodDisruptionBudget
+      name: checkout
+    patch: |
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: checkout
+  - path: ingress-host.yaml
+
+configMapGenerator:
+  - name: checkout-config
+    behavior: merge
+    literals:
+      - LOG_LEVEL=debug
+
+# The generated ConfigMap gets a content hash in its name, so changing a value
+# here rolls the Deployment automatically. Without it, `kubectl apply` updates
+# the ConfigMap and the running pods keep the old values until something
+# unrelated restarts them -- a genuinely confusing failure.
+generatorOptions:
+  disableNameSuffixHash: false
+
+images:
+  - name: nginxinc/nginx-unprivileged
+    newTag: 1.27-alpine

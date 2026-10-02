@@ -1,0 +1,21 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: checkout
+  annotations:
+    # No TLS redirect in dev: the kind cluster has no certificate.
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  tls: []
+  rules:
+    - host: checkout.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: checkout
+                port:
+                  name: http

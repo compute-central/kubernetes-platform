@@ -1,0 +1,39 @@
+---
+# helm upgrade --install checkout charts/webapp -f charts/webapp/values-dev.yaml
+#
+# Tuned for a single-node kind cluster.
+replicaCount: 1
+
+config:
+  LOG_LEVEL: "debug"
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+# One node has nothing to autoscale onto, and a PDB on a single-node cluster
+# blocks the drain you will inevitably want to run.
+autoscaling:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+topologySpread:
+  enabled: false
+
+# Fast teardown while iterating.
+preStopSleepSeconds: 1
+terminationGracePeriodSeconds: 10
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: checkout.localtest.me
+      paths:
+        - path: /
+          pathType: Prefix

@@ -1,0 +1,19 @@
+---
+apiVersion: v2
+name: webapp
+description: A production-shaped Helm chart for a stateless HTTP service.
+type: application
+
+# version is the chart's own version and must be bumped on every change to the
+# chart. appVersion tracks the application image and is cosmetic -- confusing
+# the two is why "helm upgrade" sometimes appears to do nothing.
+version: 0.3.0
+appVersion: "1.27"
+
+keywords: [web, http, kubernetes]
+home: https://computecentral.in/kubernetes/
+sources:
+  - https://github.com/compute-central/kubernetes-platform
+maintainers:
+  - name: Sameer Alam
+kubeVersion: ">=1.29.0-0"

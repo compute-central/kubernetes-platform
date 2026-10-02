@@ -1,0 +1,32 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: checkout-production
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/compute-central/kubernetes-platform.git
+    # Production tracks a tag, not a branch. Tracking `main` means any merge
+    # deploys itself to production, which removes the only point at which a
+    # human could say no.
+    targetRevision: v0.3.0
+    path: manifests/overlays/production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: checkout-prod
+  syncPolicy:
+    # No `automated:` block. Production syncs are triggered deliberately, and
+    # selfHeal is deliberately off so an emergency manual change is not fought
+    # by the controller mid-incident.
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

@@ -1,0 +1,65 @@
+---
+# NetworkPolicy is deny-by-default *per direction, per pod, once any policy
+# selects that pod*. Before the first policy exists, all traffic is allowed;
+# the moment one selects a pod, everything not explicitly permitted in that
+# direction is dropped.
+#
+# This default-deny policy is therefore the foundation, and the allow rules
+# below are additive.
+#
+# None of this does anything without a CNI that implements NetworkPolicy.
+# Calico, Cilium and Antrea do; flannel does not, and the policies are then
+# silently accepted and ignored -- which is worse than an error.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}   # every pod in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-ingress-controller
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: checkout
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # The rule everyone forgets. Deny-all egress breaks DNS, and the symptom is
+    # every outbound connection failing to resolve -- which looks like a
+    # service problem, not a policy problem. UDP *and* TCP: resolvers fall back
+    # to TCP for large responses.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

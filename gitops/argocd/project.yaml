@@ -1,0 +1,42 @@
+---
+# An AppProject is the security boundary in Argo CD. Without one, every
+# Application runs with the controller's full permissions and can create
+# anything, anywhere -- including ClusterRoleBindings.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Workloads owned by the platform team
+  sourceRepos:
+    - https://github.com/compute-central/kubernetes-platform.git
+  destinations:
+    - namespace: 'checkout-*'
+      server: https://kubernetes.default.svc
+  # Allow-list, not deny-list. A new cluster-scoped kind appearing in a future
+  # Kubernetes release is then denied by default rather than silently permitted.
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: ServiceAccount
+    - group: apps
+      kind: Deployment
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding

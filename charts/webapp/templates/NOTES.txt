@@ -1,0 +1,34 @@
+{{ .Chart.Name }} {{ .Chart.Version }} installed as release "{{ .Release.Name }}" in namespace {{ .Release.Namespace }}.
+
+Image:    {{ include "webapp.image" . }}
+Replicas: {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }} (HPA){{ else }}{{ .Values.replicaCount }} (fixed){{ end }}
+
+Watch the rollout finish:
+
+  kubectl rollout status deployment/{{ include "webapp.fullname" . }} -n {{ .Release.Namespace }} --timeout=120s
+
+{{- if .Values.ingress.enabled }}
+
+Reachable at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+No Ingress is enabled. Reach it locally with:
+
+  kubectl port-forward svc/{{ include "webapp.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+  curl localhost:8080{{ .Values.probes.path }}
+{{- end }}
+
+{{- if not .Values.networkPolicy.enabled }}
+
+NOTE: networkPolicy.enabled is false, so this workload accepts traffic from
+anywhere in the cluster. Turn it on for anything that matters, and check your
+CNI actually enforces NetworkPolicy -- flannel does not.
+{{- end }}
+{{- if and .Values.autoscaling.enabled (not .Values.resources.requests.cpu) }}
+
+WARNING: autoscaling is on but no CPU request is set. The HPA will report
+"unknown" for the CPU metric and will never scale.
+{{- end }}

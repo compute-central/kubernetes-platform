@@ -1,0 +1,25 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+spec:
+  replicas: 1
+  template:
+    spec:
+      # One node: requiring a spread would leave the pod Pending.
+      topologySpreadConstraints: []
+      containers:
+        - name: app
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          # Shorter grace period: nobody is waiting on connection draining in
+          # dev, and a 45s teardown makes iterating painful.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 1"]

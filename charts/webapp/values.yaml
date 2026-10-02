@@ -1,0 +1,149 @@
+---
+# Defaults are the safe, production-leaning choice. An environment that wants
+# something cheaper overrides it; nobody has to remember to turn security on.
+
+replicaCount: 3
+
+image:
+  repository: nginxinc/nginx-unprivileged
+  tag: "1.27-alpine"
+  # Set this to pin by content rather than by a mutable tag. When present it
+  # wins over `tag`, which is what production should always do.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # Off unless the workload genuinely talks to the Kubernetes API.
+  automountServiceAccountToken: false
+
+# Rendered into a ConfigMap whose checksum annotates the pod template, so a
+# config change rolls the Deployment.
+config:
+  LOG_LEVEL: "info"
+  LISTEN_PORT: "8080"
+  UPSTREAM_TIMEOUT_SECONDS: "5"
+
+# Names of pre-existing Secrets to load as environment variables. The chart
+# deliberately does not create Secrets: putting credentials in values.yaml
+# means committing them, and `helm get values` exposes them to anyone with
+# read access to the release.
+envFromSecrets: []
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+containerPort: 8080
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    # No CPU limit by default: a limit throttles via CFS quota even on an idle
+    # node, which shows up as unexplained p99 latency. The request already
+    # guarantees a share. A memory limit is set, because memory is
+    # incompressible and one leak otherwise takes the node with it.
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 0   # 0 disables the memory metric
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 50%
+
+# Pod-level security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: ["ALL"]
+
+# readOnlyRootFilesystem means every writable path needs a volume. Listing
+# them here keeps the container's writable surface visible.
+emptyDirMounts:
+  - name: tmp
+    mountPath: /tmp
+    sizeLimit: 64Mi
+  - name: nginx-cache
+    mountPath: /var/cache/nginx
+    sizeLimit: 128Mi
+  - name: nginx-run
+    mountPath: /var/run
+    sizeLimit: 8Mi
+
+probes:
+  path: /healthz
+  startup:
+    enabled: true
+    periodSeconds: 2
+    failureThreshold: 30
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 2
+
+# Seconds to keep serving after SIGTERM, so load balancers stop routing here
+# before the process goes away. Endpoint removal and SIGTERM are concurrent,
+# not ordered.
+preStopSleepSeconds: 10
+terminationGracePeriodSeconds: 45
+
+strategy:
+  maxUnavailable: 0
+  maxSurge: 1
+
+topologySpread:
+  enabled: true
+  # ScheduleAnyway by default so a single-node cluster still schedules.
+  whenUnsatisfiable: ScheduleAnyway
+
+networkPolicy:
+  enabled: false
+  # Namespace labels allowed to reach this workload.
+  allowedNamespaces:
+    - ingress-nginx
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}

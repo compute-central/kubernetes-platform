@@ -1,0 +1,30 @@
+---
+# Least privilege, spelled out. This Role exists only so the deployment's
+# sidecar can read its own ConfigMap; it cannot see Secrets, cannot list pods,
+# and cannot touch another namespace.
+#
+# A Role is namespaced. Reaching for a ClusterRole when a Role would do is the
+# most common way a workload ends up able to read every Secret in the cluster.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: checkout-config-reader
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    # resourceNames restricts this to one named object. Without it, `get` on
+    # configmaps means every ConfigMap in the namespace.
+    resourceNames: ["checkout-config"]
+    verbs: ["get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: checkout-config-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: checkout-config-reader
+subjects:
+  - kind: ServiceAccount
+    name: checkout
