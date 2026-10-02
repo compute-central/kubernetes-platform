@@ -193,22 +193,58 @@ jobs:
           kubectl apply -k manifests/overlays/dev
           kubectl rollout status deployment/dev-checkout -n checkout-dev --timeout=180s
 
+      # A plain `kubectl run` is rejected here, and that is the namespace
+      # hardening working: checkout-dev enforces Pod Security Admission's
+      # `restricted` profile, so even a throwaway debug pod must drop all
+      # capabilities, refuse privilege escalation, run as non-root and set a
+      # seccomp profile. Spelling that out is a better demonstration of what
+      # `restricted` demands than any amount of prose.
       - name: Confirm the pods are actually serving
         run: |
           kubectl wait --for=condition=Ready pod \
             -l app.kubernetes.io/name=checkout -n checkout-dev --timeout=120s
-          kubectl run curl --rm -i --restart=Never --image=curlimages/curl:8.11.1 \
-            -n checkout-dev -- \
-            curl -sS --fail --max-time 10 --retry 5 --retry-connrefused \
-            http://dev-checkout/healthz
 
-      - name: Confirm the probe path returns 200 and the body is right
+          body=$(kubectl run curl --rm -i --restart=Never -n checkout-dev \
+            --image=curlimages/curl:8.11.1 \
+            --overrides='{
+              "spec": {
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "seccompProfile": {"type": "RuntimeDefault"}
+                },
+                "containers": [{
+                  "name": "curl",
+                  "image": "curlimages/curl:8.11.1",
+                  "args": ["-sS", "--fail", "--max-time", "10", "--retry", "5",
+                           "--retry-connrefused", "http://dev-checkout/healthz"],
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "readOnlyRootFilesystem": true,
+                    "capabilities": {"drop": ["ALL"]}
+                  }
+                }]
+              }
+            }')
+
+          echo "response: ${body}"
+          echo "${body}" | grep -qx ok \
+            || { echo "::error::GET /healthz did not return the expected body"; exit 1; }
+
+      # The counterpart: a pod that does NOT meet `restricted` must be
+      # rejected. Without this, the namespace labels could silently stop
+      # working and nothing would notice.
+      - name: Confirm Pod Security Admission rejects a non-compliant pod
         run: |
-          kubectl run curl-body --rm -i --restart=Never --image=curlimages/curl:8.11.1 \
-            -n checkout-dev -- \
-            curl -sS --fail --max-time 10 --retry 5 --retry-connrefused \
-            http://dev-checkout/healthz | grep -qx ok \
-            || { echo "::error::/healthz did not return the expected body"; exit 1; }
+          if kubectl run rootpod --restart=Never -n checkout-dev \
+               --image=busybox:1.37 --command -- sleep 60 2>/tmp/psa-error; then
+            kubectl delete pod rootpod -n checkout-dev --ignore-not-found
+            echo "::error::a non-compliant pod was admitted; the PSA labels are not working"
+            exit 1
+          fi
+          grep -q 'violates PodSecurity "restricted' /tmp/psa-error \
+            || { echo "::error::rejected, but not by Pod Security Admission:"; cat /tmp/psa-error; exit 1; }
+          echo "correctly rejected:"
+          cat /tmp/psa-error
 
       - name: Confirm the security context actually applied
         run: |

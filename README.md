@@ -125,6 +125,13 @@ dependency rather than a rule you wrote. Allow both UDP *and* TCP on 53:
 resolvers fall back to TCP for large answers, so a UDP-only rule fails
 intermittently, which is much harder to diagnose.
 
+**Pod Security Admission really does reject things.** CI proves this in both
+directions: the throwaway `curl` pod it uses to check the Service has to drop
+all capabilities, refuse privilege escalation, run as non-root and set a
+seccomp profile, because a plain `kubectl run` is refused outright. A second
+check then confirms a deliberately non-compliant pod *is* rejected — without
+it, the namespace labels could silently stop working and nothing would notice.
+
 **Pod Security Admission is namespace *labels*.** Not a resource — which is why
 it is so easy to forget, and a namespace without those labels runs
 `privileged` with no restrictions at all. Pin the version so a future
